@@ -1,0 +1,36 @@
+# Ambiente virtuale
+.venv/
+venv/
+env/
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cache pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# File di build
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# File di log
+*.log
+
+# File di configurazione locale (se ne hai)
+*.local

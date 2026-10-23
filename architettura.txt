@@ -1,0 +1,31 @@
+LaserControlSuite/
+├── pyproject.toml
+├── README.md
+├── .gitignore
+├── src/
+│   └── lasercontrolsuite/
+│       ├── __init__.py
+│       ├── __main__.py
+│       ├── app.py
+│       ├── config/
+│       │   └── __init__.py
+│       ├── core/
+│       │   └── __init__.py
+│       ├── cad/
+│       │   └── __init__.py
+│       ├── cam/
+│       │   └── __init__.py
+│       ├── comm/
+│       │   └── __init__.py
+│       ├── ui/
+│       │   ├── __init__.py
+│       │   ├── main_window.py
+│       │   ├── widgets/
+│       │   │   └── __init__.py
+│       │   └── dialogs/
+│       │       └── __init__.py
+│       └── resources/
+│           └── __init__.py
+└── tests/
+    ├── __init__.py
+    └── test_smoke.py
