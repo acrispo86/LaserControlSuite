@@ -89,7 +89,7 @@ def test_item_bounding_rect_covers_geometry(qapp: QApplication) -> None:
 # =====================================================================
 # Testo: dritto (Y-up), dimensionato in mm reali
 # =====================================================================
-def _text_path_height(text: str, font_size_mm: float) -> float:
+def _text_path_height(text: str, font_size_mm: float):
     from lasercontrolsuite.cad.entity_item import EntityItem
 
     doc = Document()
@@ -166,3 +166,54 @@ def test_text_item_has_positive_height(qapp: QApplication) -> None:
     r = item.boundingRect()
     assert r.height() > 1.0
     assert r.width() > 1.0
+
+
+# =====================================================================
+# Step 9i-c — bug #8: multi-selezione drag in un unico undo
+# =====================================================================
+def test_multi_selection_drag_is_single_undo(qapp: QApplication) -> None:
+    """Bug #8: trascinare N item selezionati deve produrre UN solo undo command."""
+    from PySide6.QtGui import QUndoStack
+    from PySide6.QtWidgets import QGraphicsScene
+
+    from lasercontrolsuite.cad.entity_item import EntityItem
+
+    doc = Document()
+    e1 = PolylineEntity.line(doc.active_layer_id, 0.0, 0.0, 10.0, 0.0)
+    e2 = PolylineEntity.line(doc.active_layer_id, 0.0, 5.0, 10.0, 5.0)
+    doc.add_entity(e1)
+    doc.add_entity(e2)
+
+    scene = QGraphicsScene()
+    stack = QUndoStack()
+    scene.undo_stack = stack  # type: ignore[attr-defined]
+
+    item1 = EntityItem(e1, doc)
+    item2 = EntityItem(e2, doc)
+    scene.addItem(item1)
+    scene.addItem(item2)
+
+    item1.setSelected(True)
+    item2.setSelected(True)
+
+    # Simula il drag
+    item1.setPos(5.0, 3.0)
+    item2.setPos(5.0, 3.0)
+
+    # Stato pre-drag (come farebbe mousePressEvent)
+    item1._drag_pre_transforms = {
+        e1.id: (item1, item1.entity.transform),
+        e2.id: (item2, item2.entity.transform),
+    }
+    item1._pre_drag_transform = item1.entity.transform
+
+    # Consolida (come farebbe mouseReleaseEvent)
+    item1._finalize_drag()
+
+    assert stack.count() == 1
+    assert e1.transform.almost_equals(Matrix2D.translation(5.0, 3.0))
+    assert e2.transform.almost_equals(Matrix2D.translation(5.0, 3.0))
+
+    stack.undo()
+    assert e1.transform.is_identity()
+    assert e2.transform.is_identity()

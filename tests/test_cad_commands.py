@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtGui import QUndoStack  # noqa: E402
 
-from lasercontrolsuite.core.commands import (  # noqa: E402
+from lasercontrolsuite.cad.commands import (  # noqa: E402
     AddEntityCommand,
     RemoveEntityCommand,
     ReplaceEntityCommand,

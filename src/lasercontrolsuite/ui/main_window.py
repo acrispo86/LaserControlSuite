@@ -22,12 +22,13 @@ from lasercontrolsuite import __version__
 from lasercontrolsuite.cad.shortcuts import Shortcuts
 from lasercontrolsuite.cad.toolbar import DrawingToolBar
 from lasercontrolsuite.cad.tools import (
-    BezierTool, EllipseTool, LineTool, NodeEditTool, PenTool,
+    BezierTool, EllipseTool, LineTool, MeasureTool, NodeEditTool, PenTool,
     PolygonTool, PolylineTool, RectTool, SelectTool, StarTool, TextTool,
 )
 from lasercontrolsuite.cad.view import CadGraphicsView
 from lasercontrolsuite.comm.controller import GrblController
 from lasercontrolsuite.config import Settings
+from lasercontrolsuite.core.offset_ops import OffsetJoinStyle, OffsetMode
 from lasercontrolsuite.core.operations import AlignMode, DistributeMode
 from lasercontrolsuite.resources.icons import make_icon
 from lasercontrolsuite.resources.theme import THEME
@@ -35,6 +36,7 @@ from lasercontrolsuite.resources.theme_manager import ThemeManager
 from lasercontrolsuite.ui.dialogs.array_dialog import ArrayDialog
 from lasercontrolsuite.ui.dialogs.gcode_viewer_dialog import GCodeViewerDialog
 from lasercontrolsuite.ui.dialogs.machine_settings_dialog import MachineSettingsDialog
+from lasercontrolsuite.ui.dialogs.offset_dialog import OffsetDialog
 from lasercontrolsuite.ui.dialogs.trace_dialog import TraceDialog
 from lasercontrolsuite.ui.panels.cam_panel import CamPanel
 from lasercontrolsuite.ui.panels.console_panel import ConsolePanel
@@ -67,10 +69,12 @@ class MainWindow(QMainWindow):
         self._zoom_label = QLabel("Zoom: 100%")
         self._tool_label = QLabel("Strumento: Seleziona")
         self._machine_label = QLabel("Disconnesso")
+        self._measure_label = QLabel("")
         self._coord_label.setMinimumWidth(200)
         self._zoom_label.setMinimumWidth(90)
         self._tool_label.setMinimumWidth(160)
         self._machine_label.setMinimumWidth(240)
+        self._measure_label.setMinimumWidth(260)
 
         self._build_tools()
         self._build_drawing_toolbar()
@@ -142,12 +146,13 @@ class MainWindow(QMainWindow):
             "polygon": self._polygon_tool,
             "star": self._star_tool,
             "text": TextTool(v),
+            "measure": MeasureTool(v),
         }
         self._tool_labels = {
             "select": "Seleziona", "nodes": "Nodi", "pen": "Penna",
             "line": "Linea", "polyline": "Polilinea", "bezier": "Bézier",
             "rect": "Rettangolo", "ellipse": "Ellisse", "polygon": "Poligono",
-            "star": "Stella", "text": "Testo",
+            "star": "Stella", "text": "Testo", "measure": "Misura",
         }
 
         self._tool_options._poly_sides.valueChanged.connect(
@@ -228,6 +233,10 @@ class MainWindow(QMainWindow):
         act_inter = QAction("Intersezione", self)
         act_inter.triggered.connect(self._on_boolean_intersection)
         tb.addAction(act_inter)
+
+        act_offset = QAction("Offset…", self)
+        act_offset.triggered.connect(self._on_offset)
+        tb.addAction(act_offset)
 
         tb.addSeparator()
 
@@ -312,6 +321,11 @@ class MainWindow(QMainWindow):
         act_convert.setShortcut(QKeySequence("Ctrl+Shift+P"))
         act_convert.triggered.connect(self._on_convert_to_path)
         edit_menu.addAction(act_convert)
+
+        edit_menu.addSeparator()
+        act_offset = QAction("&Offset…", self)
+        act_offset.triggered.connect(self._on_offset)
+        edit_menu.addAction(act_offset)
 
         cam_menu = bar.addMenu("&CAM")
         act_gen = QAction("&Genera G-code…", self)
@@ -401,6 +415,7 @@ class MainWindow(QMainWindow):
     def _build_status_bar(self) -> None:
         status = QStatusBar(self)
         self.setStatusBar(status)
+        status.addPermanentWidget(self._measure_label)
         status.addPermanentWidget(self._tool_label)
         status.addPermanentWidget(self._coord_label)
         status.addPermanentWidget(self._zoom_label)
@@ -434,6 +449,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self._canvas.cursorMoved.connect(self._on_cursor_moved)
         self._canvas.zoomChanged.connect(self._on_zoom_changed)
+        self._canvas.measureChanged.connect(self._on_measure_changed)
 
         self._grbl_controller.connected.connect(self._on_controller_connected)
         self._grbl_controller.disconnected.connect(self._on_controller_disconnected)
@@ -472,6 +488,9 @@ class MainWindow(QMainWindow):
     def _on_zoom_changed(self, zoom: float) -> None:
         self._zoom_label.setText(f"Zoom: {zoom * 100:.0f}%")
 
+    def _on_measure_changed(self, text: str) -> None:
+        self._measure_label.setText(text)
+
     def _on_copy(self) -> None:
         n = self._canvas.editor.copy_selection()
         if n:
@@ -505,7 +524,6 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Array", "Seleziona prima una o più entità.")
             return
 
-        # Calcola il centro del bbox della selezione per il default
         xs = []
         ys = []
         for e in sources:
@@ -563,6 +581,28 @@ class MainWindow(QMainWindow):
         if warnings:
             self._show_warnings(f"{label} — Avvisi", warnings)
         self.statusBar().showMessage(msg, 3000)
+
+    def _on_offset(self) -> None:
+        if not self._canvas.editor.selected_entities():
+            QMessageBox.information(self, "Offset", "Seleziona prima una o più entità.")
+            return
+
+        dlg = OffsetDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        distance, mode_str, join_str = dlg.values()
+        mode = OffsetMode(mode_str)
+        join = OffsetJoinStyle(join_str)
+
+        n, warnings = self._canvas.editor.offset_selection(distance, mode, join)
+        if n == 0:
+            if warnings:
+                QMessageBox.warning(self, "Offset", "\n".join(warnings))
+            return
+        if warnings:
+            self._show_warnings("Offset — Avvisi", warnings)
+        self.statusBar().showMessage(f"Offset: {n} entità generate.", 3000)
 
     def _on_import_dxf(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

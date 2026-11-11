@@ -6,8 +6,12 @@ editing, così eredita automaticamente la sua trasformazione. Disegna:
   - i handle come quadratini
   - i nodi come cerchi (pieni = selezionati, vuoti = non selezionati)
 
-La dimensione visiva dei marker è costante in pixel: nel ``paint`` la scala
-corrente viene letta da ``painter.transform().m11()``.
+La dimensione visiva dei marker è costante in pixel. Step 9i-d: la scala
+viene letta da ``QStyleOptionGraphicsItem.levelOfDetailFromTransform``
+(metodo raccomandato da Qt), con fallback su ``painter.transform().m11()``.
+Prima usavamo ``painter.transform().m11()`` diretto e in alcune versioni
+di Qt il valore non include la view transform quando l'item è figlio di
+un altro item, producendo nodi giganteschi.
 """
 
 from __future__ import annotations
@@ -32,6 +36,21 @@ NODE_STROKE = QColor(THEME.accent)
 NODE_SELECTED_FILL = QColor(0xFF, 0xFF, 0xFF)
 HANDLE_FILL = QColor(0xFF, 0x8C, 0x00)
 HANDLE_LINE = QColor(0xFF, 0x8C, 0x00, 120)
+
+
+def _paint_scale(painter: QPainter, option) -> float:
+    """Fattore di scala corrente (px schermo / unità scena).
+
+    Priorità a ``option.levelOfDetailFromTransform`` (metodo ufficiale Qt).
+    Fallback su ``painter.transform().m11()`` per contesti in cui ``option``
+    è ``None`` (es. rendering offscreen).
+    """
+    if option is not None:
+        try:
+            return abs(option.levelOfDetailFromTransform(painter.worldTransform()))
+        except (AttributeError, TypeError):
+            pass
+    return abs(painter.transform().m11())
 
 
 class NodeOverlayItem(QGraphicsItem):
@@ -95,7 +114,7 @@ class NodeOverlayItem(QGraphicsItem):
         )
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: N802
-        scale = abs(painter.transform().m11())
+        scale = _paint_scale(painter, option)
         if scale <= 1e-9:
             return
 
@@ -111,7 +130,7 @@ class NodeOverlayItem(QGraphicsItem):
             pen = QPen(HANDLE_LINE, line_width)
             pen.setCosmetic(True)
             painter.setPen(pen)
-            for i, node in enumerate(self._path.nodes):
+            for node in self._path.nodes:
                 center = QPointF(node.point[0], node.point[1])
                 if node.handle_in is not None:
                     h = node.abs_handle_in()

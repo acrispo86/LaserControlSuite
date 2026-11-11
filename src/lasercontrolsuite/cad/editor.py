@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from lasercontrolsuite.core.boolean_ops import BooleanMode, boolean_operation
-from lasercontrolsuite.core.commands import (
+from lasercontrolsuite.cad.commands import (
     AddEntitiesCommand,
     BatchTransformCommand,
     RemoveEntitiesCommand,
     ReplaceEntityCommand,
 )
-from lasercontrolsuite.core.entities import Entity
+from lasercontrolsuite.cad.text_to_path import text_entity_to_paths
+from lasercontrolsuite.core.boolean_ops import BooleanMode, boolean_operation
+from lasercontrolsuite.core.entities import Entity, TextEntity
 from lasercontrolsuite.core.matrix import Matrix2D
+from lasercontrolsuite.core.offset_ops import (
+    OffsetJoinStyle,
+    OffsetMode,
+    compute_offset,
+)
 from lasercontrolsuite.core.operations import (
     AlignMode,
     DistributeMode,
@@ -191,11 +197,6 @@ class CanvasEditor:
         if len(entities) < 2:
             return 0, ["Servono almeno due entità per l'operazione booleana."]
 
-        # Per DIFFERENCE, il target è l'entità con area (bbox) maggiore;
-        # le altre vengono sottratte. Questo rende il comportamento
-        # deterministico e indipendente dall'ordine di stacking di Qt
-        # (``scene.selectedItems()`` restituisce gli item in ordine inverso
-        # di aggiunta, che non corrisponde a "cosa l'utente voleva sottrarre").
         if mode == BooleanMode.DIFFERENCE:
             entities = sorted(entities, key=_bbox_area, reverse=True)
 
@@ -223,11 +224,69 @@ class CanvasEditor:
     def boolean_intersection(self) -> tuple[int, list[str]]:
         return self._run_boolean(BooleanMode.INTERSECTION, "Intersezione")
 
+    # --------------------------------------------------------------- offset
+    def offset_selection(
+        self,
+        distance_mm: float,
+        mode: OffsetMode = OffsetMode.OUTSET,
+        join_style: OffsetJoinStyle = OffsetJoinStyle.ROUND,
+    ) -> tuple[int, list[str]]:
+        """Sostituisce le entità selezionate con il loro offset.
+
+        Returns:
+            ``(n_paths_generati, warnings)``. Se ``n_paths_generati == 0``
+            il documento non viene modificato.
+        """
+        entities = self.selected_entities()
+        if not entities:
+            return 0, ["Nessuna entità selezionata per l'offset."]
+
+        paths, warnings = compute_offset(
+            entities, distance_mm, mode=mode, join_style=join_style,
+        )
+        if not paths:
+            return 0, warnings
+
+        self.undo_stack.beginMacro("Offset")
+        try:
+            self.undo_stack.push(RemoveEntitiesCommand(self.document, entities))
+            self.undo_stack.push(AddEntitiesCommand(self.document, paths, "Offset"))
+        finally:
+            self.undo_stack.endMacro()
+
+        self._select_entities(paths)
+        return len(paths), warnings
+
     # --------------------------------------------------------------- convert
     def convert_selection_to_path(self) -> int:
+        """Converte la selezione in path.
+
+        - Entità non-text convertibili (rettangoli, cerchi, ...) vengono
+          sostituite con un singolo ``PathEntity`` preservando id, layer e
+          transform (via ``entity_to_path`` in core).
+        - ``TextEntity`` viene convertito usando i glifi reali (adapter Qt
+          in ``cad.text_to_path``) producendo N ``PathEntity`` (uno per
+          subpath). L'operazione è annullabile con Ctrl+Z.
+
+        Returns:
+            Numero di entità originali convertite (non i path generati).
+        """
         entities = self.selected_entities()
-        converted_ids: list[str] = []
+        if not entities:
+            return 0
+
+        text_entities: list[TextEntity] = []
+        other_entities: list[Entity] = []
         for e in entities:
+            if isinstance(e, TextEntity):
+                text_entities.append(e)
+            else:
+                other_entities.append(e)
+
+        converted_ids: list[str] = []
+        converted_count = 0
+
+        for e in other_entities:
             if isinstance(e, PathEntity):
                 continue
             new_e = entity_to_path(e)
@@ -239,13 +298,28 @@ class CanvasEditor:
                 )
             )
             converted_ids.append(e.id)
+            converted_count += 1
+
+        for text_e in text_entities:
+            new_paths = text_entity_to_paths(text_e)
+            if not new_paths:
+                continue
+            self.undo_stack.beginMacro("Testo → path")
+            try:
+                self.undo_stack.push(RemoveEntitiesCommand(self.document, [text_e]))
+                self.undo_stack.push(AddEntitiesCommand(self.document, new_paths))
+            finally:
+                self.undo_stack.endMacro()
+            converted_ids.extend(p.id for p in new_paths)
+            converted_count += 1
+
         if converted_ids:
             self.scene.clearSelection()
             for eid in converted_ids:
                 item = self.scene.entity_item(eid)
                 if item is not None:
                     item.setSelected(True)
-        return len(converted_ids)
+        return converted_count
 
     # --------------------------------------------------------------- import
     def import_entities(

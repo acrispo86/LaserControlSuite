@@ -19,6 +19,7 @@ Interazioni:
 
 Step 9d: ascolta `ThemeManager.themeChanged` per aggiornare la stylesheet
 inline del widget `_stats`.
+Step 9j: `_emit` → `notify`; import dei comandi da `cad.commands`.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from lasercontrolsuite.cad.commands import ChangeEntityLayerCommand
 from lasercontrolsuite.cam import (
     GlobalParams,
     GCodeResult,
@@ -56,7 +58,6 @@ from lasercontrolsuite.cam import (
     generate_gcode,
 )
 from lasercontrolsuite.config import Settings
-from lasercontrolsuite.core.commands import ChangeEntityLayerCommand
 from lasercontrolsuite.core.document import DocumentEvent
 from lasercontrolsuite.core.layer import SUGGESTED_COLORS, Layer
 from lasercontrolsuite.resources.theme import THEME
@@ -544,7 +545,7 @@ class CamPanel(QWidget):
         if not color.isValid():
             return
         layer.color = color.name()
-        doc._emit(DocumentEvent("layer_changed", layer_id=layer.id))
+        doc.notify(DocumentEvent("layer_changed", layer_id=layer.id))
 
     def _on_table_context_menu(self, pos) -> None:
         row = self._table.rowAt(pos.y())
@@ -625,7 +626,7 @@ class CamPanel(QWidget):
         if layer is None:
             return
         layer.priority = max(0, layer.priority + delta)
-        doc._emit(DocumentEvent("layer_changed", layer_id=layer.id))
+        doc.notify(DocumentEvent("layer_changed", layer_id=layer.id))
         self._refresh_layer_table()
 
     def _on_assign_selection(self) -> None:

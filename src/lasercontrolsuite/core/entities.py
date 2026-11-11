@@ -13,6 +13,9 @@ Convenzioni (importanti per il CAM e per i tool):
 Bounding box:
   ``local_bounding_box()`` è l'AABB della polilinea ``local_points()``.
   ``world_bounding_box()`` è l'AABB stretto della geometria trasformata.
+
+Step 9i-c: le costanti di campionamento (``_ARC_SEGMENTS``, ``_SAMPLES``)
+sono ``ClassVar`` — non diventano campi di dataclass.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from lasercontrolsuite.core.ids import new_id
 from lasercontrolsuite.core.matrix import Matrix2D
@@ -127,7 +131,7 @@ class CircleEntity(Entity):
     cy: float = 0.0
     r: float = 1.0
 
-    _ARC_SEGMENTS: int = 64
+    _ARC_SEGMENTS: ClassVar[int] = 64
 
     def local_points(self) -> list[PointTuple]:
         n = self._ARC_SEGMENTS
@@ -162,7 +166,7 @@ class EllipseEntity(Entity):
     rx: float = 1.0
     ry: float = 1.0
 
-    _ARC_SEGMENTS: int = 96
+    _ARC_SEGMENTS: ClassVar[int] = 96
 
     def local_points(self) -> list[PointTuple]:
         n = self._ARC_SEGMENTS
@@ -246,6 +250,10 @@ class StarEntity(Entity):
 
     La geometria locale è **sempre centrata su (0, 0)**. Posizione e
     rotazione si esprimono tramite la ``transform``.
+
+    Nota (Step 9i-c): il campo ``points`` è un ``int`` (numero di punte)
+    mentre ``PolylineEntity.points`` è una lista. Il rename in ``spikes``
+    è rimandato a dopo Step 9j (vedi KNOWN_ISSUES #21).
     """
 
     outer_radius: float = 1.0
@@ -290,7 +298,7 @@ class BezierEntity(Entity):
     p2: PointTuple = (0.0, 0.0)
     p3: PointTuple = (0.0, 0.0)
 
-    _SAMPLES: int = 48
+    _SAMPLES: ClassVar[int] = 48
 
     def _sample(self, n: int | None = None) -> list[PointTuple]:
         n = self._SAMPLES if n is None else max(2, int(n))

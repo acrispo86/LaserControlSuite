@@ -371,3 +371,97 @@ def test_entity_to_path_preserves_transform() -> None:
     path = entity_to_path(poly)
     assert path is not None
     assert path.transform.almost_equals(poly.transform)
+
+
+# =====================================================================
+# Step 9i-c — bug #10 e #11
+# =====================================================================
+def test_remove_node_closed_3_to_2_opens_path() -> None:
+    """Bug #10: rimuovere un nodo da path chiuso a 3 nodi deve aprire il path."""
+    p = PathEntity(
+        layer_id="L1",
+        nodes=[
+            PathNode((0.0, 0.0)),
+            PathNode((10.0, 0.0)),
+            PathNode((5.0, 8.0)),
+        ],
+        closed=True,
+    )
+    remove_node_at(p, 0)
+    assert len(p.nodes) == 2
+    assert p.closed is False
+
+
+def test_remove_node_closed_4_to_3_stays_closed() -> None:
+    """Rimuovere un nodo da un path chiuso a 4 nodi lascia 3 nodi: resta chiuso."""
+    p = PathEntity(
+        layer_id="L1",
+        nodes=[
+            PathNode((0.0, 0.0)),
+            PathNode((10.0, 0.0)),
+            PathNode((10.0, 10.0)),
+            PathNode((0.0, 10.0)),
+        ],
+        closed=True,
+    )
+    remove_node_at(p, 0)
+    assert len(p.nodes) == 3
+    assert p.closed is True
+
+
+def test_set_node_smooth_open_first_endpoint() -> None:
+    """Bug #11: sul primo nodo di un path aperto, la tangente è one-sided."""
+    p = PathEntity(
+        layer_id="L1",
+        nodes=[
+            PathNode((0.0, 0.0)),
+            PathNode((10.0, 0.0)),
+            PathNode((20.0, 5.0)),
+        ],
+        closed=False,
+    )
+    set_node_smooth(p, 0)
+    n0 = p.nodes[0]
+    assert n0.handle_out is not None
+    assert n0.handle_in is not None
+    # Tangente verso il nodo successivo (10, 0)
+    assert n0.handle_out[0] > 0
+    assert math.isclose(n0.handle_out[1], 0.0, abs_tol=1e-6)
+    assert math.isclose(n0.handle_in[0], -n0.handle_out[0], abs_tol=1e-9)
+    assert math.isclose(n0.handle_in[1], -n0.handle_out[1], abs_tol=1e-9)
+
+
+def test_set_node_smooth_open_last_endpoint() -> None:
+    """Bug #11: sull'ultimo nodo di un path aperto, la tangente è one-sided."""
+    p = PathEntity(
+        layer_id="L1",
+        nodes=[
+            PathNode((0.0, 0.0)),
+            PathNode((10.0, 0.0)),
+            PathNode((20.0, 0.0)),
+        ],
+        closed=False,
+    )
+    set_node_smooth(p, 2)
+    n2 = p.nodes[2]
+    assert n2.handle_out is not None
+    assert n2.handle_out[0] > 0
+    assert math.isclose(n2.handle_out[1], 0.0, abs_tol=1e-6)
+
+
+def test_set_node_smooth_closed_endpoint_still_wraps() -> None:
+    """Su path chiuso, il primo nodo usa ancora il wrap-around."""
+    p = PathEntity(
+        layer_id="L1",
+        nodes=[
+            PathNode((0.0, 0.0)),
+            PathNode((10.0, 0.0)),
+            PathNode((5.0, 10.0)),
+        ],
+        closed=True,
+    )
+    set_node_smooth(p, 0)
+    n0 = p.nodes[0]
+    assert n0.handle_out is not None
+    assert n0.handle_in is not None
+    assert is_smooth_node(n0)

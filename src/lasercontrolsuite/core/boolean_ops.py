@@ -9,6 +9,9 @@ Note:
   - I path non convertibili (es. testo) generano un warning e vengono ignorati.
   - Il risultato con fori viene restituito come una lista di `PathEntity`:
     uno per l'anello esterno, uno per ogni foro.
+
+Gli helper ``entity_to_polygon``, ``polygon_ring_to_path`` e
+``polygons_to_paths`` sono pubblici perché riusati da ``offset_ops`` (Step 9g).
 """
 
 from __future__ import annotations
@@ -50,7 +53,7 @@ def boolean_operation(
     polys: list[Polygon] = []
 
     for e in entities:
-        poly = _entity_to_polygon(e, warnings)
+        poly = entity_to_polygon(e, warnings)
         if poly is not None:
             polys.append(poly)
 
@@ -92,20 +95,12 @@ def boolean_operation(
     if not out_polys:
         return [], warnings + ["Il risultato non contiene poligoni."]
 
-    paths: list[PathEntity] = []
     layer_id = entities[0].layer_id
-
-    for poly in out_polys:
-        # Anello esterno
-        paths.append(_polygon_ring_to_path(poly.exterior, layer_id))
-        # Fori
-        for interior in poly.interiors:
-            paths.append(_polygon_ring_to_path(interior, layer_id))
-
+    paths = polygons_to_paths(out_polys, layer_id)
     return paths, warnings
 
 
-def _entity_to_polygon(entity: Entity, warnings: list[str]) -> Polygon | None:
+def entity_to_polygon(entity: Entity, warnings: list[str]) -> Polygon | None:
     """Converte un'entità in `Polygon` shapely, con gestione dei warning."""
     path = entity_to_path(entity)
     if path is None:
@@ -149,7 +144,7 @@ def _entity_to_polygon(entity: Entity, warnings: list[str]) -> Polygon | None:
     return poly
 
 
-def _polygon_ring_to_path(ring, layer_id: str) -> PathEntity:
+def polygon_ring_to_path(ring, layer_id: str) -> PathEntity:
     """Crea un `PathEntity` chiuso a partire da un anello shapely."""
     coords = list(ring.coords)
     # shapely chiude l'anello: rimuoviamo l'ultimo punto se coincide col primo
@@ -163,3 +158,22 @@ def _polygon_ring_to_path(ring, layer_id: str) -> PathEntity:
         closed=True,
         transform=Matrix2D.identity(),
     )
+
+
+def polygons_to_paths(
+    polys: list[Polygon], layer_id: str
+) -> list[PathEntity]:
+    """Converte una lista di `Polygon` in `PathEntity` (esterno + fori).
+
+    Poligoni vuoti, invalidi o con area trascurabile vengono scartati.
+    """
+    paths: list[PathEntity] = []
+    for poly in polys:
+        if poly.is_empty or not poly.is_valid:
+            continue
+        if poly.area < 1e-9:
+            continue
+        paths.append(polygon_ring_to_path(poly.exterior, layer_id))
+        for interior in poly.interiors:
+            paths.append(polygon_ring_to_path(interior, layer_id))
+    return paths

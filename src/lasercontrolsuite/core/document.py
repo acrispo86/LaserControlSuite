@@ -45,6 +45,17 @@ class Document:
         except ValueError:
             pass
 
+    def notify(self, event: DocumentEvent) -> None:
+        """Emette un evento a tutti i subscriber.
+
+        API pubblica. Preferirla a ``_emit`` ovunque fuori da ``Document``
+        stesso (Step 9i-c — bug #20). ``_emit`` resta come alias interno per
+        retro-compatibilità con i chiamanti non ancora migrati
+        (``core/operations.py``, ``ui/panels/cam_panel.py``): da ripulire in
+        Step 9j.
+        """
+        self._emit(event)
+
     def _emit(self, event: DocumentEvent) -> None:
         for cb in list(self._subscribers):
             cb(event)

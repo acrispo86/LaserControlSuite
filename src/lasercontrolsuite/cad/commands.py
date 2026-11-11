@@ -1,4 +1,9 @@
-"""Comandi undo/redo per il ``Document``."""
+"""Comandi undo/redo per il ``Document``.
+
+Spostato da ``core/commands.py`` in Step 9j: questo modulo importa
+``QUndoCommand`` da PySide6 e quindi non rispetta il principio "core puro
+Python". Tutti i comandi vivono ora in ``cad/`` (adapter Qt).
+"""
 
 from __future__ import annotations
 
@@ -86,6 +91,8 @@ class TransformEntityCommand(QUndoCommand):
 
 
 class BatchTransformCommand(QUndoCommand):
+    """Trasforma più entità in un'unica operazione undo."""
+
     def __init__(
         self,
         document: Document,
@@ -136,13 +143,13 @@ class ChangeEntityLayerCommand(QUndoCommand):
         e = self._document.get_entity(self._entity_id)
         if e is not None:
             e.layer_id = self._new_layer_id
-            self._document._emit(DocumentEvent("entity_changed", entity_id=e.id))
+            self._document.notify(DocumentEvent("entity_changed", entity_id=e.id))
 
     def undo(self) -> None:
         e = self._document.get_entity(self._entity_id)
         if e is not None:
             e.layer_id = self._old_layer_id
-            self._document._emit(DocumentEvent("entity_changed", entity_id=e.id))
+            self._document.notify(DocumentEvent("entity_changed", entity_id=e.id))
 
 
 class EditPathCommand(QUndoCommand):
@@ -176,7 +183,7 @@ class EditPathCommand(QUndoCommand):
             return
         entity.nodes = copy.deepcopy(nodes)
         entity.closed = closed
-        self._document._emit(DocumentEvent("entity_changed", entity_id=self._entity_id))
+        self._document.notify(DocumentEvent("entity_changed", entity_id=self._entity_id))
 
     def redo(self) -> None:
         self._apply(self._new_nodes, self._new_closed)

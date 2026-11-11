@@ -212,3 +212,30 @@ def test_cad_scene_work_area(qapp):
     assert s.work_area == r
     s.set_work_area(None)
     assert s.work_area is None
+
+
+# =====================================================================
+# Step 9i-c — bug #7 (verificato falso positivo)
+# =====================================================================
+def test_fit_to_work_area_angles_visible(view) -> None:
+    """Bug #7 verificato falso positivo: dopo fit_to_work_area, gli angoli
+    dell'area di lavoro sono dentro il viewport."""
+    from PySide6.QtCore import QRectF
+
+    wa = QRectF(0.0, 0.0, 200.0, 200.0)
+    view.set_work_area(wa)
+    view.fit_to_work_area(margin=0.05)
+
+    corners_scene = [
+        QPointF(wa.left(), wa.top()),
+        QPointF(wa.right(), wa.top()),
+        QPointF(wa.right(), wa.bottom()),
+        QPointF(wa.left(), wa.bottom()),
+    ]
+    vr = view.viewport().rect()
+    for c in corners_scene:
+        vp = view.mapFromScene(c)
+        assert vr.contains(vp), (
+            f"Angolo {c.x()},{c.y()} fuori dal viewport: {vp.x()},{vp.y()} "
+            f"(viewport {vr.width()}×{vr.height()})"
+        )

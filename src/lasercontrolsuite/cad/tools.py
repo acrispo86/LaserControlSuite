@@ -6,11 +6,18 @@ import copy
 import math
 from abc import ABC, abstractmethod
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QGraphicsView, QInputDialog
+from PySide6.QtWidgets import (
+    QDialog,
+    QGraphicsView,
+    QInputDialog,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+)
 
-from lasercontrolsuite.core.commands import (
+from lasercontrolsuite.cad.commands import (
     AddEntityCommand,
     EditPathCommand,
     ReplaceEntityCommand,
@@ -659,6 +666,15 @@ class NodeEditTool(Tool):
             return entity
         return None
 
+    def has_selected_nodes(self) -> bool:
+        """True se almeno un nodo è selezionato nell'overlay.
+
+        Usato da ``CadGraphicsView.event()`` (ShortcutOverride) per decidere
+        se intercettare Delete/Backspace evitando che la shortcut globale
+        "Elimina" cancelli l'intera entità. Step 9i-d.
+        """
+        return bool(self._selected)
+
     # --------------------------------------------------------------- helpers
     def _px_to_scene(self, px: float) -> float:
         scale = abs(self.view.transform().m11())
@@ -677,7 +693,7 @@ class NodeEditTool(Tool):
 
     def _notify_entity_changed(self, path: PathEntity) -> None:
         from lasercontrolsuite.core.document import DocumentEvent
-        self.document._emit(DocumentEvent("entity_changed", entity_id=path.id))
+        self.document.notify(DocumentEvent("entity_changed", entity_id=path.id))
 
     # --------------------------------------------------------------- snapshot/undo
     def _snapshot(self, path: PathEntity) -> tuple[list[PathNode], bool]:
@@ -1290,3 +1306,241 @@ class TextTool(Tool):
         e.transform = Matrix2D.translation(snapped.x(), snapped.y())
         self.undo_stack.push(AddEntityCommand(self.document, e))
         return True
+
+
+# =====================================================================
+# Misura
+# =====================================================================
+class _MeasureResultDialog(QDialog):
+    """Dialog non modale che mostra il risultato di una misura.
+
+    - Flag ``Qt.Tool`` per non intasare la taskbar.
+    - Non si distrugge alla chiusura: ``hide()`` invece di ``close()``.
+    - La posizione viene impostata una sola volta (``position_once``),
+      poi resta dove l'utente la sposta.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Misura")
+        self.setWindowFlag(Qt.WindowType.Tool, True)
+        self.setModal(False)
+        self.setMinimumWidth(320)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        self._label = QLabel("—", self)
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setWordWrap(True)
+        self._label.setStyleSheet("font-size: 13pt; padding: 4px;")
+        layout.addWidget(self._label)
+
+        btn_close = QPushButton("Chiudi", self)
+        btn_close.clicked.connect(self.hide)
+        layout.addWidget(btn_close)
+
+        self._positioned = False
+
+    def set_result(self, text: str) -> None:
+        self._label.setText(text)
+
+    def position_once(self, global_center: QPoint) -> None:
+        if self._positioned:
+            return
+        self.adjustSize()
+        self.move(
+            global_center.x() - self.width() // 2,
+            global_center.y() - self.height() // 2,
+        )
+        self._positioned = True
+
+
+class MeasureTool(Tool):
+    """Strumento di misura: distanza e angolo.
+
+    Modalità:
+      - ``distance`` (default): 2 click → distanza + angolo azimut del
+        segmento.
+      - ``angle``: 3 click (A → B → C) → angolo interno al vertice B
+        (0°–180°).
+
+    Comandi:
+      - ``Esc``: annulla / reset
+      - ``A``: toggle modalità distanza ↔ angolo
+
+    Risultato:
+      Mostrato in un ``QDialog`` non modale (``Qt.Tool``) e sulla status bar
+      tramite il signal ``measureChanged`` della view. Il dialog si
+      auto-aggiorna ad ogni nuova misura.
+
+    Ciclo: dopo che il risultato è stato emesso, i punti restano congelati
+    finché non arriva un nuovo click. Il nuovo click **resetta** la misura
+    e ricomincia dal punto 1.
+    """
+
+    name = "measure"
+
+    MODE_DISTANCE = "distance"
+    MODE_ANGLE = "angle"
+
+    _DOT_RADIUS_PX = 2.5
+
+    def __init__(self, view) -> None:
+        super().__init__(view)
+        self._mode: str = self.MODE_DISTANCE
+        self._points: list[QPointF] = []
+        self._hover: QPointF | None = None
+
+        parent_window = view.window() if view is not None else None
+        self._result_dialog = _MeasureResultDialog(parent_window)
+
+    # --------------------------------------------------------------- lifecycle
+    def activate(self) -> None:
+        self._view.setCursor(Qt.CursorShape.CrossCursor)
+        self._view.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self._reset()
+
+    def deactivate(self) -> None:
+        self._view.setCursor(Qt.CursorShape.ArrowCursor)
+        self._reset()
+        self._emit_status("")
+
+    # --------------------------------------------------------------- internals
+    def _reset(self) -> None:
+        self._points = []
+        self._hover = None
+        self._result_dialog.hide()
+        self.scene.update()
+        self._emit_status(self._prompt())
+
+    def _prompt(self) -> str:
+        if self._mode == self.MODE_DISTANCE:
+            return "Misura distanza: click punto 1/2  (A: angolo, Esc: esci)"
+        return "Misura angolo: click A/B/C  (A: distanza, Esc: esci)"
+
+    def _max_points(self) -> int:
+        return 2 if self._mode == self.MODE_DISTANCE else 3
+
+    def _emit_status(self, text: str) -> None:
+        try:
+            self._view.measureChanged.emit(text)
+        except (AttributeError, RuntimeError):
+            pass
+
+    def _compute_distance(self, a: QPointF, b: QPointF) -> str:
+        dx = b.x() - a.x()
+        dy = b.y() - a.y()
+        dist = math.hypot(dx, dy)
+        angle = math.degrees(math.atan2(dy, dx))
+        return f"Distanza: {dist:.3f} mm\nAngolo: {angle:.2f}°"
+
+    def _compute_angle(self, a: QPointF, b: QPointF, c: QPointF) -> str:
+        v1x = a.x() - b.x()
+        v1y = a.y() - b.y()
+        v2x = c.x() - b.x()
+        v2y = c.y() - b.y()
+        n1 = math.hypot(v1x, v1y)
+        n2 = math.hypot(v2x, v2y)
+        if n1 < 1e-9 or n2 < 1e-9:
+            return "Angolo: non definito\n(punti coincidenti)"
+        dot = (v1x * v2x + v1y * v2y) / (n1 * n2)
+        dot = max(-1.0, min(1.0, dot))
+        ang = math.degrees(math.acos(dot))
+        return f"Angolo: {ang:.2f}°\n(lati: {n1:.3f} / {n2:.3f} mm)"
+
+    def _show_result_dialog(self, text: str) -> None:
+        try:
+            self._result_dialog.set_result(text)
+            self._result_dialog.adjustSize()
+            center = self._view.mapToGlobal(self._view.rect().center())
+            self._result_dialog.position_once(center)
+            self._result_dialog.show()
+            self._result_dialog.raise_()
+            self._result_dialog.activateWindow()
+        except (RuntimeError, AttributeError):
+            # Widget distrutto o view non disponibile: ignora.
+            pass
+
+    # --------------------------------------------------------------- mouse
+    def mouse_press(self, event, scene_pos: QPointF) -> bool:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+
+        # Se la misura precedente era completa, un nuovo click ricomincia.
+        if len(self._points) >= self._max_points():
+            self._points = []
+            self._result_dialog.hide()
+
+        snapped = _snap(self.view, scene_pos)
+        self._points.append(QPointF(snapped))
+        self._hover = None  # niente preview finché non arriva un mouse_move
+
+        if len(self._points) >= self._max_points():
+            if self._mode == self.MODE_DISTANCE:
+                result = self._compute_distance(*self._points[:2])
+                status = result.replace("\n", "   ")
+            else:
+                result = self._compute_angle(*self._points[:3])
+                status = result.replace("\n", "   ")
+            self._emit_status(status)
+            self._show_result_dialog(result)
+        else:
+            idx = len(self._points)
+            total = self._max_points()
+            self._emit_status(f"Misura: punto {idx}/{total} acquisito")
+
+        self.scene.update()
+        return True
+
+    def mouse_move(self, event, scene_pos: QPointF) -> bool:
+        if not self._points:
+            return False
+        # Se la misura è completa, non aggiornare l'hover: la misura resta
+        # "congelata" finché non arriva un nuovo click.
+        if len(self._points) >= self._max_points():
+            return False
+        self._hover = _snap(self.view, scene_pos)
+        self.scene.update()
+        return True
+
+    # --------------------------------------------------------------- key
+    def key_press(self, event) -> bool:
+        if event.key() == Qt.Key.Key_Escape:
+            self._reset()
+            return True
+        if event.key() == Qt.Key.Key_A:
+            self._mode = (
+                self.MODE_ANGLE if self._mode == self.MODE_DISTANCE
+                else self.MODE_DISTANCE
+            )
+            self._reset()
+            return True
+        return False
+
+    # --------------------------------------------------------------- overlay
+    def paint_overlay(self, painter: QPainter) -> None:
+        if not self._points and self._hover is None:
+            return
+
+        painter.setPen(self._start_preview())
+        pts = list(self._points)
+        if (
+            self._hover is not None
+            and pts
+            and len(self._points) < self._max_points()
+        ):
+            preview_pts = pts + [self._hover]
+        else:
+            preview_pts = pts
+        for i in range(len(preview_pts) - 1):
+            painter.drawLine(preview_pts[i], preview_pts[i + 1])
+
+        pen = QPen(PREVIEW_COLOR, 1)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(PREVIEW_COLOR)
+        for p in self._points:
+            painter.drawEllipse(p, self._DOT_RADIUS_PX, self._DOT_RADIUS_PX)
+        painter.setBrush(Qt.BrushStyle.NoBrush)

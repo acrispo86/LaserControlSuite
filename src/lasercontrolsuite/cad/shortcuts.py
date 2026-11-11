@@ -18,6 +18,7 @@ class Shortcuts:
     POLYGON = "G"
     STAR = "S"
     TEXT = "T"
+    MEASURE = "M"
 
     # Modifica
     UNDO = "Ctrl+Z"

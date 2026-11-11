@@ -40,6 +40,7 @@ class DrawingToolBar(QToolBar):
         self._add_tool("star", "Stella", Shortcuts.STAR)
         self.addSeparator()
         self._add_tool("text", "Testo", Shortcuts.TEXT)
+        self._add_tool("measure", "Misura", Shortcuts.MEASURE)
 
         self._actions["select"].setChecked(True)
 

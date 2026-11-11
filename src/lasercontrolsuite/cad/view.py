@@ -7,11 +7,17 @@ Convenzione Qt (row-vector):
   - zoom ancorato al cursore: ``T' = T * Tr(sx, sy) * S(f) * Tr(-sx, -sy)``
 
 Fit iniziale: ritentato finché il viewport ha dimensioni valide.
+
+Step 9i-c: nessuna modifica funzionale al fit.
+Step 9i-d: intercetto ``ShortcutOverride`` per Delete/Backspace quando il
+tool è ``nodes`` con nodi selezionati: altrimenti la shortcut globale
+"Elimina" (WindowShortcut) scatta prima del ``keyPressEvent`` e cancella
+l'intera entità invece del nodo.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QKeyEvent,
     QMouseEvent,
@@ -130,6 +136,7 @@ class CadGraphicsView(QGraphicsView):
 
     zoomChanged = Signal(float)
     cursorMoved = Signal(QPointF)
+    measureChanged = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -370,6 +377,27 @@ class CadGraphicsView(QGraphicsView):
         self.setTransform(t)
 
     # ------------------------------------------------------------------ events
+    def event(self, event) -> bool:  # noqa: N802
+        """Intercetta ShortcutOverride per Delete/Backspace in NodeEditTool.
+
+        Le shortcut di QAction con contesto WindowShortcut scattano PRIMA
+        del keyPressEvent del widget con focus. Quando siamo in modalità
+        ``nodes`` con nodi selezionati, vogliamo che il tasto arrivi al
+        NodeEditTool (che cancella il nodo) invece di scatenare l'azione
+        globale "Elimina" (che cancella l'intera entità). Step 9i-d.
+        """
+        if event.type() == QEvent.Type.ShortcutOverride:
+            if (
+                self._tool is not None
+                and self._tool.name == "nodes"
+                and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+            ):
+                has_nodes = getattr(self._tool, "has_selected_nodes", None)
+                if callable(has_nodes) and has_nodes():
+                    event.accept()
+                    return True
+        return super().event(event)
+
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
         self._sync_rulers()

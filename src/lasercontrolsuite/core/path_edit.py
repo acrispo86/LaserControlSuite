@@ -197,11 +197,20 @@ def add_node_at_segment(path: PathEntity, segment_index: int, t: float) -> int:
 
 
 def remove_node_at(path: PathEntity, index: int) -> None:
+    """Rimuove un nodo dal path.
+
+    Se dopo la rimozione il path è chiuso con meno di 3 nodi, il flag
+    ``closed`` viene forzato a ``False``: un path chiuso a 2 nodi produce un
+    segmento duplicato nel G-code (la "chiusura" coincide col segmento
+    unico). Step 9i-c — bug #10.
+    """
     if not (0 <= index < len(path.nodes)):
         raise IndexError(f"index {index} fuori range")
     if len(path.nodes) <= 2:
         return
     path.nodes.pop(index)
+    if path.closed and len(path.nodes) < 3:
+        path.closed = False
 
 
 def set_node_corner(path: PathEntity, index: int) -> None:
@@ -211,15 +220,34 @@ def set_node_corner(path: PathEntity, index: int) -> None:
 
 
 def set_node_smooth(path: PathEntity, index: int, tangent_length: float | None = None) -> None:
+    """Rende il nodo smooth (handle simmetrici lungo la tangente).
+
+    Per path **aperti**, i nodi estremi (``index == 0`` e ``index == n - 1``)
+    usano una tangente **one-sided** verso il vicino interno: niente
+    wrap-around, che produrrebbe handle puntati "verso l'esterno" e curve
+    sbagliate. Step 9i-c — bug #11.
+    """
     n = len(path.nodes)
     if n < 2:
         return
     node = path.nodes[index]
+    is_open = not path.closed
+    at_first = is_open and index == 0
+    at_last = is_open and index == n - 1
 
+    # Direzione della tangente
     if node.handle_out is not None:
         tx, ty = node.handle_out
     elif node.handle_in is not None:
         tx, ty = -node.handle_in[0], -node.handle_in[1]
+    elif at_first:
+        next_p = path.nodes[1].point
+        tx = next_p[0] - node.point[0]
+        ty = next_p[1] - node.point[1]
+    elif at_last:
+        prev_p = path.nodes[n - 2].point
+        tx = node.point[0] - prev_p[0]
+        ty = node.point[1] - prev_p[1]
     else:
         prev_i = (index - 1) % n
         next_i = (index + 1) % n
@@ -231,14 +259,25 @@ def set_node_smooth(path: PathEntity, index: int, tangent_length: float | None =
     length = math.hypot(tx, ty)
     if length < 1e-9:
         return
+
+    # Lunghezza degli handle
     if tangent_length is None:
-        prev_i = (index - 1) % n
-        next_i = (index + 1) % n
-        d_prev = math.hypot(node.point[0] - path.nodes[prev_i].point[0],
-                            node.point[1] - path.nodes[prev_i].point[1])
-        d_next = math.hypot(node.point[0] - path.nodes[next_i].point[0],
-                            node.point[1] - path.nodes[next_i].point[1])
-        tangent_length = max(1.0, (d_prev + d_next) / 6.0)
+        if at_first:
+            d_next = math.hypot(node.point[0] - path.nodes[1].point[0],
+                                node.point[1] - path.nodes[1].point[1])
+            tangent_length = max(1.0, d_next / 3.0)
+        elif at_last:
+            d_prev = math.hypot(node.point[0] - path.nodes[n - 2].point[0],
+                                node.point[1] - path.nodes[n - 2].point[1])
+            tangent_length = max(1.0, d_prev / 3.0)
+        else:
+            prev_i = (index - 1) % n
+            next_i = (index + 1) % n
+            d_prev = math.hypot(node.point[0] - path.nodes[prev_i].point[0],
+                                node.point[1] - path.nodes[prev_i].point[1])
+            d_next = math.hypot(node.point[0] - path.nodes[next_i].point[0],
+                                node.point[1] - path.nodes[next_i].point[1])
+            tangent_length = max(1.0, (d_prev + d_next) / 6.0)
 
     ux, uy = tx / length, ty / length
     node.handle_out = (ux * tangent_length, uy * tangent_length)

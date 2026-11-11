@@ -14,6 +14,14 @@ Nota sulla convenzione Y e sulle unità del testo:
 
 Step 9d: le penne sono ricostruite a ogni `paint()` da `THEME` (proxy):
 non serve cache. Sul `themeChanged` facciamo solo `update()`.
+
+Step 9i-c: multi-selezione drag consolidato in un unico undo command
+(``BatchTransformCommand``). ``mousePressEvent`` salva le trasformazioni
+pre-drag di tutti gli item selezionati; ``mouseReleaseEvent`` le consuma
+in ``_finalize_drag()``.
+
+Step 9j: import dei commandi da ``cad.commands`` (spostati da
+``core.commands`` per rispettare il principio "core puro").
 """
 
 from __future__ import annotations
@@ -30,8 +38,11 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene
 
+from lasercontrolsuite.cad.commands import (
+    BatchTransformCommand,
+    TransformEntityCommand,
+)
 from lasercontrolsuite.cad.qt_utils import mm_per_px_at_qt_dpi, to_qtransform
-from lasercontrolsuite.core.commands import TransformEntityCommand
 from lasercontrolsuite.core.document import Document
 from lasercontrolsuite.core.entities import (
     BezierEntity,
@@ -66,6 +77,9 @@ class EntityItem(QGraphicsItem):
         self._entity = entity
         self._document = document
         self._pre_drag_transform: Matrix2D = entity.transform
+        # Salvato al mousePress per TUTTI gli item selezionati:
+        #   eid -> (item, transform_pre_drag)
+        self._drag_pre_transforms: dict[str, tuple["EntityItem", Matrix2D]] = {}
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
@@ -225,25 +239,79 @@ class EntityItem(QGraphicsItem):
         self._pre_drag_transform = self._entity.transform
         super().mousePressEvent(event)
 
+        # Dopo super(), la selezione è quella definitiva per il drag.
+        # Salva la transform pre-drag di TUTTI gli item selezionati:
+        # servirà per il BatchTransformCommand in _finalize_drag().
+        self._drag_pre_transforms = {}
+        scene = self.scene()
+        if scene is not None:
+            for item in scene.selectedItems():
+                if isinstance(item, EntityItem):
+                    self._drag_pre_transforms[item.entity.id] = (
+                        item,
+                        item.entity.transform,
+                    )
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         super().mouseReleaseEvent(event)
         if event.button() != Qt.MouseButton.LeftButton:
+            self._drag_pre_transforms = {}
             return
-        delta = self.pos()
-        if delta.isNull():
+        self._finalize_drag()
+
+    def _finalize_drag(self) -> None:
+        """Consolida il drag in un unico comando undo.
+
+        Se ``_drag_pre_transforms`` contiene più item, produce un
+        ``BatchTransformCommand`` (un solo Ctrl+Z per tutto il gruppo).
+        Altrimenti un ``TransformEntityCommand`` (drag singolo).
+
+        Step 9i-c — bug #8.
+        """
+        pre = self._drag_pre_transforms
+        self._drag_pre_transforms = {}
+
+        if not pre:
+            # Fallback: mousePress non ha salvato nulla (es. codice chiamato
+            # direttamente senza passare da Qt, o drag singolo degenere).
+            delta = self.pos()
+            if delta.isNull():
+                return
+            self.setPos(0.0, 0.0)
+            new_transform = (
+                Matrix2D.translation(delta.x(), delta.y())
+                @ self._pre_drag_transform
+            )
+            self._push_transform_command({self._entity.id: new_transform})
             return
 
-        self.setPos(0.0, 0.0)
-        new_transform = (
-            Matrix2D.translation(delta.x(), delta.y()) @ self._pre_drag_transform
+        transforms: dict[str, Matrix2D] = {}
+        for eid, (item, base) in pre.items():
+            delta = item.pos()
+            if delta.isNull():
+                continue
+            item.setPos(0.0, 0.0)
+            transforms[eid] = Matrix2D.translation(delta.x(), delta.y()) @ base
+
+        if not transforms:
+            return
+
+        self._push_transform_command(transforms)
+
+    def _push_transform_command(self, transforms: dict[str, Matrix2D]) -> None:
+        scene = self.scene()
+        undo_stack = (
+            getattr(scene, "undo_stack", None) if scene is not None else None
         )
 
-        scene = self.scene()
-        if isinstance(scene, QGraphicsScene) and hasattr(scene, "undo_stack"):
-            scene.undo_stack.push(
-                TransformEntityCommand(
-                    self._document, self._entity.id, new_transform
-                )
-            )
+        if undo_stack is None:
+            # Nessuno stack: applica direttamente (test / uso non undo-able).
+            for eid, t in transforms.items():
+                self._document.update_entity_transform(eid, t)
+            return
+
+        if len(transforms) == 1:
+            eid, t = next(iter(transforms.items()))
+            undo_stack.push(TransformEntityCommand(self._document, eid, t))
         else:
-            self._document.update_entity_transform(self._entity.id, new_transform)
+            undo_stack.push(BatchTransformCommand(self._document, transforms))

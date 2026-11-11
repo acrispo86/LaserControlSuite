@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from lasercontrolsuite.cad.entity_item import EntityItem
-from lasercontrolsuite.core.commands import (
+from lasercontrolsuite.cad.commands import (
     ChangeEntityLayerCommand,
     TransformEntityCommand,
 )
